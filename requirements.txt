@@ -1,0 +1,6 @@
+torch
+opencv-python
+numpy
+mediapipe==0.10.14
+edge-tts
+playsound==1.2.2

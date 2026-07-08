@@ -1,13 +1,14 @@
 # model.py
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 import json
 import os
 
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 # ---------------------
-# Adjacency normalization
+# Math from a GCN tutorial to normalize adjacency matrix
 # ---------------------
 def normalize_adj(A, eps=1e-6):
     D = np.sum(A, axis=1)
@@ -16,14 +17,14 @@ def normalize_adj(A, eps=1e-6):
 
 
 # ---------------------
-# ST-GCN model (light version)
+# Our PyTorch Model
 # ---------------------
 
 class STGCN(nn.Module):
     def __init__(self, num_classes=10, in_channels=126, hidden_dim=128):
         super(STGCN, self).__init__()
 
-        # 1D temporal convs across frames
+        # Basic 1D convolutions
         self.features = nn.Sequential(
             nn.Conv1d(in_channels, hidden_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(hidden_dim),
@@ -33,7 +34,7 @@ class STGCN(nn.Module):
             nn.ReLU(),
         )
 
-        # initialize fc lazily (so we can infer its input dim after forward)
+        # FC layer gets set later based on input size
         self.fc = None
         self.num_classes = num_classes
 
@@ -56,9 +57,9 @@ class STGCN(nn.Module):
 
 
 # ---------------------
-# Dataset class
+# PyTorch dataset
 # ---------------------
-class SkeletonDataset(torch.utils.data.Dataset):
+class SignDataset(torch.utils.data.Dataset):
     def __init__(self, root):
         self.samples = []
         self.label_map = {}
@@ -84,7 +85,7 @@ class SkeletonDataset(torch.utils.data.Dataset):
 
         clean = []
         for frame in frames:
-            # Ensure we have a list of 21 or 42 keypoints (each [x, y, z])
+            # Make sure we have either 1 or 2 hands detected
             flat = []
 
             if isinstance(frame, list):
@@ -99,10 +100,10 @@ class SkeletonDataset(torch.utils.data.Dataset):
                     else:
                         flat.extend([0.0, 0.0, 0.0])
             else:
-                # fallback if frame is malformed
+                # if something goes wrong, just put 0
                 flat = [0.0] * 126
 
-            # fix inconsistent length
+            # pad if hands are missing
             if len(flat) < 126:
                 flat += [0.0] * (126 - len(flat))
             elif len(flat) > 126:
@@ -110,14 +111,14 @@ class SkeletonDataset(torch.utils.data.Dataset):
 
             clean.append(flat)
 
-        # --- Handle clip length (pad/truncate to fixed 30 frames) ---
+        # --- Make every video exactly 30 frames ---
         max_frames = 30
         if len(clean) < max_frames:
             clean += [[0.0] * 126 for _ in range(max_frames - len(clean))]
         elif len(clean) > max_frames:
             clean = clean[:max_frames]
 
-        # --- Convert to numpy safely ---
+        # --- convert to numpy array ---
         arr = np.array(clean, dtype=np.float32)
         assert arr.shape == (30, 126), f"Bad shape {arr.shape} in {path}"
 

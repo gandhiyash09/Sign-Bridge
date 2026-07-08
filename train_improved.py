@@ -1,10 +1,12 @@
-import os
 import json
+import os
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from model import STGCN, SkeletonDataset
 from tqdm import tqdm
+
+from model import STGCN, SignDataset
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DATASET_DIR = "dataset"
@@ -17,7 +19,8 @@ LR = 1e-4
 
 def load_label_map():
     if not os.path.exists(LABEL_MAP_PATH):
-        raise RuntimeError("label_map.json missing — run generate_label_map.py first.")
+        print("[*] error: label_map.json missing")
+        return None
 
     with open(LABEL_MAP_PATH, "r") as f:
         label_map = json.load(f)
@@ -25,15 +28,17 @@ def load_label_map():
     # keys become integers
     label_map = {int(k): v for k, v in label_map.items()}
 
-    print(f"[INFO] Loaded {len(label_map)} classes from label_map.json")
+    print(f"[*] loaded {len(label_map)} classes from label map")
     return label_map
 
 
 def train():
     label_map = load_label_map()
+    if label_map is None: return
+
     num_classes = len(label_map)
 
-    dataset = SkeletonDataset(DATASET_DIR)
+    dataset = SignDataset(DATASET_DIR)
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     model = STGCN(in_channels=126, num_classes=num_classes).to(DEVICE)
@@ -43,8 +48,8 @@ def train():
 
     best_loss = float("inf")
 
-    print("[INFO] Starting training...")
-    print(f"[INFO] Training on {len(dataset)} samples and {num_classes} classes.")
+    print("[*] starting training...")
+    print(f"[*] training on {len(dataset)} samples, {num_classes} classes.")
 
     for epoch in range(1, EPOCHS + 1):
         model.train()
@@ -76,9 +81,9 @@ def train():
             }
 
             torch.save(checkpoint, SAVE_PATH)
-            print("[INFO] Saved best model ✔")
+            print("[*] saved new best model!")
 
-    print("[INFO] Training completed!")
+    print("[*] done training.")
 
 
 if __name__ == "__main__":

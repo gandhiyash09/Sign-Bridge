@@ -1,9 +1,10 @@
-import cv2
-import time
-import os
 import json
-import torch
+import os
+import time
+
+import cv2
 import mediapipe as mp
+import torch
 
 # -----------------------------
 # Config
@@ -21,13 +22,14 @@ def record_clip(cap, hands, sign_name):
     """Record a single clip of fixed duration."""
     os.makedirs(os.path.join(SAVE_DIR, sign_name), exist_ok=True)
 
-    print(f"[INFO] Recording '{sign_name}' for {RECORD_SECONDS}s ...")
+    print(f"[*] recording '{sign_name}' for {RECORD_SECONDS}s ...")
     frames = []
     start_time = time.time()
 
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("[*] error: camera failed")
             break
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -66,13 +68,13 @@ def record_clip(cap, hands, sign_name):
     with open(json_path, "w") as f:
         json.dump({"frames": frames}, f)
 
-    print(f"[SAVED] {json_path} ({len(frames)} frames)\n")
+    print(f"[*] saved to {json_path} with {len(frames)} frames\n")
     return True
 
 
 if __name__ == "__main__":
-    print(f"[INFO] Using device: {DEVICE}")
-    print("[INFO] Mediapipe Recorder Ready\n")
+    print(f"[*] running on {DEVICE}")
+    print("[*] mediapipe recorder ready\n")
 
     cap = cv2.VideoCapture(0)
     hands = mp_hands.Hands(
@@ -96,6 +98,7 @@ if __name__ == "__main__":
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("[*] error: camera failed")
             break
 
         cv2.putText(frame, f"Sign: {sign_name}", (10, 40),
@@ -119,4 +122,4 @@ if __name__ == "__main__":
 
     cap.release()
     cv2.destroyAllWindows()
-    print("[INFO] Recorder exited cleanly.")
+    print("[*] exited recorder.")

@@ -1,9 +1,9 @@
 """
 annotator.py
 
-Simple OpenCV-based annotation GUI to correct per-frame keypoints and re-save JSONs.
-Usage:
-    python annotator.py --json path/to/video_YYYY.json --video path/to/video_YYYY.mp4
+Small tool to fix landmark positions in recorded samples.
+Run:
+python annotator.py --json path/to/video_YYYY.json --video path/to/video_YYYY.mp4
 
 Controls:
 - Left mouse drag: move nearest keypoint
@@ -12,13 +12,13 @@ Controls:
 - s: save JSON
 - q or ESC: quit
 
-The tool overlays the canonical 48 nodes (with indices). Click-drag a point to reposition it.
-When saved, it updates the JSON file in place.
-
+Shows all landmarks so they can be adjusted if MediaPipe gets them wrong.
+Saves the JSON back to the same file.
 """
 
 import argparse
 import json
+
 import cv2
 import numpy as np
 
@@ -56,7 +56,7 @@ def save_data(json_path, j, arr):
     j['frames'] = frames
     with open(json_path, 'w') as f:
         json.dump(j, f, indent=2)
-    print('[Annotator] saved', json_path)
+    print(f"[*] saved {json_path}")
 
 
 class Annotator:
@@ -85,6 +85,7 @@ class Annotator:
             ret, img = self.cap.read()
             if not ret:
                 # fallback black frame
+                print("[*] error: camera failed")
                 img = np.zeros((480,640,3), dtype=np.uint8)
         else:
             img = np.zeros((480,640,3), dtype=np.uint8)

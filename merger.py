@@ -1,24 +1,25 @@
 import os
 import shutil
+from pathlib import Path
 
-# Paths to your dataset folders
-datasets = [
-    r"C:\Users\lavis\SignLanguage_STGCN\dataset",
-    r"C:\Users\lavis\SNS_Project\dataset"
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+DATASETS = [
+    PROJECT_ROOT.parent / "SignLanguage_STGCN" / "dataset",
+    PROJECT_ROOT.parent / "SNS_Project" / "dataset"
 ]
 
-# Path to the merged output folder
-merged_dataset = r"C:\Users\lavis\PycharmProjects\FinalSNS\dataset"
-os.makedirs(merged_dataset, exist_ok=True)
+MERGED_DATASET = PROJECT_ROOT / "dataset"
+os.makedirs(MERGED_DATASET, exist_ok=True)
 
-for dataset in datasets:
+for dataset in DATASETS:
     for root, dirs, files in os.walk(dataset):
         for file in files:
             src_path = os.path.join(root, file)
 
             # Determine class name (assumes class is parent folder name)
             class_name = os.path.basename(os.path.dirname(src_path))
-            dest_dir = os.path.join(merged_dataset, class_name)
+            dest_dir = os.path.join(MERGED_DATASET, class_name)
             os.makedirs(dest_dir, exist_ok=True)
 
             # Create unique filename if duplicate exists
@@ -33,4 +34,4 @@ for dataset in datasets:
 
             shutil.copy2(src_path, dest_path)
 
-print("✅ All datasets merged successfully into:", merged_dataset)
+print(f"[*] merged everything into: {MERGED_DATASET}")

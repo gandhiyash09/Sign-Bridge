@@ -1,14 +1,21 @@
-import torch
-import cv2
-import numpy as np
-import time
-from model import STGCN
-import mediapipe as mp
-import json
 import asyncio
-import edge_tts
-from playsound import playsound
+import json
 import os
+import sys
+import tempfile
+import threading
+import time
+
+import cv2
+import edge_tts
+# mock tensorflow to bypass mediapipe import issues
+sys.modules['tensorflow'] = None
+import mediapipe as mp
+import numpy as np
+import torch
+from playsound import playsound
+
+from model import STGCN
 
 # -----------------------------------------------------
 # Configuration
@@ -24,24 +31,31 @@ os.makedirs("audio", exist_ok=True)
 
 
 # -----------------------------------------------------
-# Natural TTS using Edge TTS + playsound
+# TTS stuff
 # -----------------------------------------------------
-async def speak_text(sentence: str, voice_name: str):
-    output_file = "audio/tts_output.mp3"
+def speak_text(sentence, voice_name):
+    def _play():
+        output_file = tempfile.mktemp(suffix=".mp3", dir="audio")
+        
+        async def _tts():
+            tts = edge_tts.Communicate(sentence, voice_name)
+            await tts.save(output_file)
+            
+        asyncio.run(_tts())
+        playsound(output_file)
+        
+        try:
+            os.remove(output_file)
+        except OSError:
+            pass
 
-    tts = edge_tts.Communicate(sentence, voice_name)
-    await tts.save(output_file)
-
-    playsound(output_file)
-
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    threading.Thread(target=_play, daemon=True).start()
 
 
 # -----------------------------------------------------
-# Load model checkpoint
+# load the weights
 # -----------------------------------------------------
-def load_checkpoint(model, path):
+def load_model(model, path):
     checkpoint = torch.load(path, map_location=DEVICE)
 
     # warm-up to init lazy fc
@@ -49,16 +63,16 @@ def load_checkpoint(model, path):
     _ = model(dummy)
 
     model.load_state_dict(checkpoint["model"], strict=False)
-    print("[INFO] Model loaded successfully.")
+    print("[*] model loaded successfully.")
 
     with open(LABEL_MAP_PATH, "r") as f:
         return json.load(f)
 
 
 # -----------------------------------------------------
-# Preprocess keypoints buffer → tensor
+# convert frames to tensor
 # -----------------------------------------------------
-def preprocess_keypoints(frames):
+def format_frames(frames):
     frames_np = []
 
     for f in frames:
@@ -80,9 +94,9 @@ def preprocess_keypoints(frames):
 
 
 # -----------------------------------------------------
-# Text drawing helpers (glow + multiline adaptive)
+# UI drawing functions
 # -----------------------------------------------------
-def draw_glow_text(img, text, org, font, scale,
+def draw_text(img, text, org, font, scale,
                    color_front, color_back,
                    thickness_front, thickness_back):
     # glow / shadow
@@ -93,13 +107,8 @@ def draw_glow_text(img, text, org, font, scale,
                 thickness_front, cv2.LINE_AA)
 
 
-def draw_sentence_multiline(display, sentence, bottom_y, left_x, max_width):
-    """
-    Draw the sentence in multiple lines at the bottom-left.
-    - Wraps words so they don't go out of view.
-    - Slightly adapts font size based on length.
-    - Keeps only last few lines visible.
-    """
+def show_text_on_screen(display, sentence, bottom_y, left_x, max_width):
+    # draws text at the bottom and wraps it if it gets too long
     font = cv2.FONT_HERSHEY_SIMPLEX
 
     # Adaptive font scale based on sentence length
@@ -141,7 +150,7 @@ def draw_sentence_multiline(display, sentence, bottom_y, left_x, max_width):
     for i, line in enumerate(reversed(lines)):
         y = bottom_y - i * line_height
         org = (left_x, y)
-        draw_glow_text(
+        draw_text(
             display,
             line,
             org,
@@ -158,20 +167,20 @@ def draw_sentence_multiline(display, sentence, bottom_y, left_x, max_width):
 # MAIN
 # -----------------------------------------------------
 def main():
-    print(f"[INFO] Using device: {DEVICE}")
+    print(f"[*] running on {DEVICE}")
 
     # ---------------- Voice selection (f / m) ----------------
     print("\nChoose voice gender for speech:")
-    print("  f → Female (en-US-JennyNeural)")
-    print("  m → Male   (en-US-GuyNeural)")
+    print("  f -> Female (en-US-JennyNeural)")
+    print("  m -> Male   (en-US-GuyNeural)")
     choice = input("Enter choice (f/m, default = f): ").strip().lower()
 
     if choice == "m":
         voice_name = "en-US-GuyNeural"
-        print("[INFO] Using MALE voice: en-US-GuyNeural")
+        print("[*] using male voice")
     else:
         voice_name = "en-US-JennyNeural"
-        print("[INFO] Using FEMALE voice: en-US-JennyNeural")
+        print("[*] using female voice")
 
     # ---------------- Label map ----------------
     with open(LABEL_MAP_PATH, "r") as f:
@@ -181,38 +190,24 @@ def main():
     num_classes = len(idx_to_label)
 
     # Identify special classes
-    SPACE_CLASS = None
-    END_CLASS = None
-    DELETE_CLASS = None
-    HELLO_CLASS = None
-    GOOD_MORNING_CLASS = None
-    THANK_YOU_CLASS = None
-    EVERYONE_CLASS = None
+    def get_idx(target):
+        return next((idx for idx, lbl in idx_to_label.items() if lbl.upper() == target), None)
 
-    for idx, lbl in idx_to_label.items():
-        u = lbl.upper()
-        if u == "SPACE":
-            SPACE_CLASS = idx
-        elif u == "END":
-            END_CLASS = idx
-        elif u == "DELETE":
-            DELETE_CLASS = idx
-        elif u == "HELLO":
-            HELLO_CLASS = idx
-        elif u == "GOOD MORNING":
-            GOOD_MORNING_CLASS = idx
-        elif u == "THANK YOU":
-            THANK_YOU_CLASS = idx
-        elif u == "EVERYONE":
-            EVERYONE_CLASS = idx
+    space_class = get_idx("SPACE")
+    end_class = get_idx("END")
+    delete_class = get_idx("DELETE")
+    hello_class = get_idx("HELLO")
+    good_morning_class = get_idx("GOOD MORNING")
+    thank_you_class = get_idx("THANK YOU")
+    everyone_class = get_idx("EVERYONE")
 
-    print(f"[INFO] SPACE={SPACE_CLASS}, END={END_CLASS}, DELETE={DELETE_CLASS}")
-    print(f"[INFO] HELLO={HELLO_CLASS}, GOOD MORNING={GOOD_MORNING_CLASS}, "
-          f"THANK YOU={THANK_YOU_CLASS}, EVERYONE={EVERYONE_CLASS}")
+    print(f"[*] space={space_class}, end={end_class}, delete={delete_class}")
+    print(f"[*] hello={hello_class}, good morning={good_morning_class}, "
+          f"thank you={thank_you_class}, everyone={everyone_class}")
 
     # ---------------- Model ----------------
     model = STGCN(in_channels=126, num_classes=num_classes).to(DEVICE)
-    load_checkpoint(model, MODEL_PATH)
+    load_model(model, MODEL_PATH)
     model.eval()
 
     # ---------------- Mediapipe Hands ----------------
@@ -227,16 +222,17 @@ def main():
     # ---------------- Camera & Window ----------------
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        raise RuntimeError("Cannot open camera")
+        print("[*] error: cannot open camera")
+        return
 
     window_name = "Sign Detection - Tech Blue"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, 1280, 840)
 
-    print("[INFO] Press ESC to exit.")
+    print("[*] press ESC to exit.")
 
-    frame_buffer = []
-    last_infer_time = time.time()
+    frames_buf = []
+    last_time = time.time()
 
     current_token = "..."
     sentence = ""
@@ -252,6 +248,7 @@ def main():
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("[*] error: camera failed")
             break
 
         h, w = frame.shape[:2]
@@ -272,13 +269,13 @@ def main():
         else:
             keypoints_frame = keypoints_frame[:42]
 
-        frame_buffer.append(keypoints_frame)
-        if len(frame_buffer) > 30:
-            frame_buffer = frame_buffer[-30:]
+        frames_buf.append(keypoints_frame)
+        if len(frames_buf) > 30:
+            frames_buf = frames_buf[-30:]
 
         # ------------- Inference every 0.7s -------------
-        if time.time() - last_infer_time > 0.7:
-            x = preprocess_keypoints(frame_buffer).float().to(DEVICE)
+        if time.time() - last_time > 0.7:
+            x = format_frames(frames_buf).float().to(DEVICE)
 
             with torch.no_grad():
                 preds = model(x)
@@ -294,86 +291,65 @@ def main():
 
             else:
                 label = idx_to_label[pred_idx]
-                token_used = None  # what we actually append / operate on
+                token_to_add = None
 
                 # ---------- SPACE ----------
-                if pred_idx == SPACE_CLASS:
-                    token_used = " "
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += " "
-                        last_token = token_used
-                        last_added_time = now
+                if pred_idx == space_class:
+                    token_to_add = " "
                     current_token = "[SPACE]"
 
                 # ---------- END ----------
-                elif pred_idx == END_CLASS:
+                elif pred_idx == end_class:
                     current_token = "[END]"
                     if sentence.strip():
-                        print(f"[SENTENCE] {sentence}")
-                        asyncio.run(speak_text(sentence, voice_name))
+                        print(f"[*] sentence: {sentence}")
+                        speak_text(sentence, voice_name)
                     sentence = ""
                     last_token = None
                     last_added_time = now
 
                 # ---------- DELETE (undo last char + optional spaces) ----------
-                elif pred_idx == DELETE_CLASS:
+                elif pred_idx == delete_class:
                     current_token = "[DELETE]"
                     if sentence:
-                        # remove trailing spaces
-                        while sentence.endswith(" "):
-                            sentence = sentence[:-1]
-                        # then remove last character
+                        sentence = sentence.rstrip(" ")
                         if sentence:
                             sentence = sentence[:-1]
                     last_token = None
                     last_added_time = now
 
                 # ---------- PHRASE: HELLO ----------
-                elif pred_idx == HELLO_CLASS:
-                    token_used = "HELLO"
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += "HELLO "
-                        last_token = token_used
-                        last_added_time = now
+                elif pred_idx == hello_class:
+                    token_to_add = "HELLO "
                     current_token = "HELLO"
 
                 # ---------- PHRASE: GOOD MORNING ----------
-                elif pred_idx == GOOD_MORNING_CLASS:
-                    token_used = "GOOD MORNING"
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += "GOOD MORNING "
-                        last_token = token_used
-                        last_added_time = now
+                elif pred_idx == good_morning_class:
+                    token_to_add = "GOOD MORNING "
                     current_token = "GOOD MORNING"
 
                 # ---------- PHRASE: THANK YOU ----------
-                elif pred_idx == THANK_YOU_CLASS:
-                    token_used = "THANK YOU"
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += "THANK YOU "
-                        last_token = token_used
-                        last_added_time = now
+                elif pred_idx == thank_you_class:
+                    token_to_add = "THANK YOU "
                     current_token = "THANK YOU"
 
                 # ---------- PHRASE: EVERYONE ----------
-                elif pred_idx == EVERYONE_CLASS:
-                    token_used = "EVERYONE"
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += "EVERYONE "
-                        last_token = token_used
-                        last_added_time = now
+                elif pred_idx == everyone_class:
+                    token_to_add = "EVERYONE "
                     current_token = "EVERYONE"
 
                 # ---------- Normal letters (A–Z etc.) ----------
                 else:
-                    token_used = label  # usually a single letter
-                    if last_token != token_used or (now - last_added_time) > COOLDOWN:
-                        sentence += label
-                        last_token = token_used
-                        last_added_time = now
+                    token_to_add = label
                     current_token = label
+                
+                if token_to_add is not None:
+                    if last_token != token_to_add or (now - last_added_time) > COOLDOWN:
+                        sentence += token_to_add
+                        last_token = token_to_add
+                        last_added_time = now
 
-            last_infer_time = time.time()
+            last_time = time.time()
 
         # ------------- FPS -------------
         new_time = time.time()
@@ -405,7 +381,7 @@ def main():
 
         # ----- Draw sentence as adaptive multiline -----
         max_text_width = int(w * 0.9)  # 90% of width
-        draw_sentence_multiline(
+        show_text_on_screen(
             display,
             sentence,
             bottom_y=h - 30,
@@ -414,7 +390,7 @@ def main():
         )
 
         # Current token (top-left)
-        draw_glow_text(
+        draw_text(
             display,
             f"Token: {current_token}",
             (25, 45),
