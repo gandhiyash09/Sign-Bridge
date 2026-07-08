@@ -1,5 +1,9 @@
 import json
 import os
+import sys
+
+# model.py lives at the project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn
